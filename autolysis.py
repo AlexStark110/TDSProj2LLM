@@ -1,3 +1,9 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["numpy", "pandas", "scikit-learn", "chardet", "requests", "seaborn", "matplotlib", "python-dotenv"]
+# ///
+
+
 import os
 import pandas as pd
 import seaborn as sns
