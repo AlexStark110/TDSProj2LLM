@@ -42,4 +42,5 @@ This project provides an automated data analysis tool that reads a CSV file, per
 
 To run the script, use the following command:
 ```sh
-python3 autolysis.py dataset.csv
+
+uv run autolysis.py dataset.csv
