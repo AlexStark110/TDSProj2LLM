@@ -1,143 +1,150 @@
 import os
+import argparse
 import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import openai
 import time
-import requests
-import json
+from pandas.plotting import scatter_matrix
 
-# Set OpenAI API key and base URL
+# Configuration: API key for OpenAI (set as environment variable)
 openai.api_key = os.getenv("AIPROXY_TOKEN")
 openai.api_base = "https://aiproxy.sanand.workers.dev/openai/v1"
 
-# Function to read CSV with multiple encoding options
+# ----------------------------- Utility Functions -----------------------------
+
 def read_csv(filename):
+    """Read CSV file with multiple encodings dynamically."""
     encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
     for encoding in encodings:
         try:
             return pd.read_csv(filename, encoding=encoding)
         except UnicodeDecodeError:
-            print(f"Failed with encoding {encoding}, trying next...")
-    print("Failed to read file with all encodings.")
+            pass
+    print("Error: Unable to decode file with supported encodings.")
     return None
 
-# Function to perform data analysis
 def analyze_data(df):
+    """Perform a comprehensive analysis of the data."""
     summary = df.describe(include='all').to_dict()
     missing_values = df.isnull().sum().to_dict()
-    numeric_df = df.select_dtypes(include=[np.number])
-    correlation_matrix = numeric_df.corr().to_dict() if not numeric_df.empty else {}
+    correlation_matrix = df.select_dtypes(include=[np.number]).corr().to_dict()
     return summary, missing_values, correlation_matrix
 
-# Function to detect outliers using the IQR method
 def detect_outliers(df):
+    """Identify outliers using the IQR method."""
     numeric_df = df.select_dtypes(include=[np.number])
     Q1 = numeric_df.quantile(0.25)
     Q3 = numeric_df.quantile(0.75)
     IQR = Q3 - Q1
     return ((numeric_df < (Q1 - 1.5 * IQR)) | (numeric_df > (Q3 + 1.5 * IQR))).sum().to_dict()
 
-# Function to generate visualizations
+def generate_insights(summary, missing_values, correlation_matrix, outliers):
+    """Generate insights using OpenAI GPT."""
+    prompt = f"""
+    Analyze the following data:
+    Summary Statistics: {summary}
+    Missing Values: {missing_values}
+    Correlation Matrix: {correlation_matrix}
+    Outliers: {outliers}
+
+    Provide actionable insights and recommendations for data cleaning, analysis, and visualization.
+    """
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[{"role": "system", "content": "You are a data analysis expert."},
+                      {"role": "user", "content": prompt}],
+            max_tokens=500
+        )
+        return response['choices'][0]['message']['content']
+    except Exception as e:
+        return f"OpenAI Error: {e}"
+
+# ----------------------------- Visualization Functions -----------------------------
+
 def create_visualizations(df, output_dir):
+    """Create a suite of visualizations."""
     os.makedirs(output_dir, exist_ok=True)
     numeric_df = df.select_dtypes(include=[np.number])
-    
-    # Correlation heatmap
+
+    # Correlation Heatmap
     if not numeric_df.empty:
         plt.figure(figsize=(10, 8))
         sns.heatmap(numeric_df.corr(), annot=True, cmap='coolwarm')
-        plt.title('Correlation Matrix')
-        plt.savefig(os.path.join(output_dir, 'correlation_matrix.png'))
+        plt.title("Correlation Heatmap")
+        plt.savefig(os.path.join(output_dir, "correlation_heatmap.png"))
         plt.close()
 
-    # Missing values bar plot
-    missing_values = df.isnull().sum()
-    if missing_values.any():
-        plt.figure(figsize=(10, 8))
-        missing_values.plot(kind='bar')
-        plt.title('Missing Values')
-        plt.savefig(os.path.join(output_dir, 'missing_values.png'))
+    # Pair Plot
+    if len(numeric_df.columns) > 1:
+        sns.pairplot(numeric_df)
+        plt.savefig(os.path.join(output_dir, "pairplot.png"))
         plt.close()
 
-    # Outliers bar plot
-    outliers = detect_outliers(df)
-    if any(outliers.values()):
-        plt.figure(figsize=(10, 6))
-        pd.Series(outliers).plot(kind='bar', color='red')
-        plt.title('Outliers')
-        plt.savefig(os.path.join(output_dir, 'outliers.png'))
+    # Histograms
+    for column in numeric_df.columns:
+        plt.figure()
+        sns.histplot(numeric_df[column], kde=True)
+        plt.title(f"Histogram of {column}")
+        plt.savefig(os.path.join(output_dir, f"histogram_{column}.png"))
         plt.close()
 
-# Function to generate insights using OpenAI
-def generate_insights(summary, missing_values, correlation_matrix, outliers):
-    prompt = f"""
-    Analyze the following data analysis:
-    - Summary: {summary}
-    - Missing Values: {missing_values}
-    - Correlation Matrix: {correlation_matrix}
-    - Outliers: {outliers}
+    # Scatter Matrix
+    if not numeric_df.empty:
+        scatter_matrix(numeric_df, figsize=(12, 12))
+        plt.savefig(os.path.join(output_dir, "scatter_matrix.png"))
+        plt.close()
 
-    Provide detailed insights and implications.
-    """
-    for attempt in range(5):
-        try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are a data analyst."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=500
-            )
-            return response['choices'][0]['message']['content'].strip()
-        except openai.error.RateLimitError:
-            time.sleep(2 ** attempt)  # Exponential backoff
-        except openai.error.OpenAIError as e:
-            print(f"Error: {e}")
-            break
-    return "Failed to generate insights."
+# ----------------------------- Report Generation -----------------------------
 
-# Function to create a README file
-def generate_readme(summary, missing_values, correlation_matrix, outliers, insights, output_dir):
-    readme_path = os.path.join(output_dir, 'README.md')
-    with open(readme_path, 'w') as f:
-        f.write("# Automated Data Analysis Report\n\n")
+def generate_readme(output_dir, summary, missing_values, correlation_matrix, outliers, insights):
+    """Generate a detailed README.md file."""
+    with open(os.path.join(output_dir, "README.md"), 'w') as f:
+        f.write("# Data Analysis Report\n\n")
         f.write("## Summary Statistics\n")
-        f.write(str(summary) + "\n\n")
+        f.write(f"{pd.DataFrame(summary).to_markdown()}\n\n")
         f.write("## Missing Values\n")
-        f.write(str(missing_values) + "\n\n")
+        f.write(f"{missing_values}\n\n")
         f.write("## Correlation Matrix\n")
-        f.write(str(correlation_matrix) + "\n\n")
+        f.write(f"{correlation_matrix}\n\n")
         f.write("## Outliers\n")
-        f.write(str(outliers) + "\n\n")
-        f.write("## Insights\n")
+        f.write(f"{outliers}\n\n")
+        f.write("## Generated Insights\n")
         f.write(insights + "\n\n")
         f.write("## Visualizations\n")
-        f.write("![Correlation Matrix](correlation_matrix.png)\n")
-        f.write("![Missing Values](missing_values.png)\n")
-        f.write("![Outliers](outliers.png)\n")
-    print(f"README generated at {readme_path}")
+        f.write("Refer to generated images in the output directory.\n")
 
-# Main function
-def main(filename):
-    df = read_csv(filename)
+# ----------------------------- Main Function -----------------------------
+
+def main():
+    """Main function to orchestrate the analysis workflow."""
+    parser = argparse.ArgumentParser(description="Automated Data Analysis Tool")
+    parser.add_argument("filename", help="Path to the input CSV file")
+    parser.add_argument("--output", default="output", help="Directory to save results")
+    args = parser.parse_args()
+
+    # Load data
+    df = read_csv(args.filename)
     if df is None:
+        print("Error: Failed to load data.")
         return
-    
+
+    # Perform analysis
     summary, missing_values, correlation_matrix = analyze_data(df)
     outliers = detect_outliers(df)
     insights = generate_insights(summary, missing_values, correlation_matrix, outliers)
-    
-    output_dir = os.path.splitext(filename)[0]
+
+    # Generate outputs
+    output_dir = args.output
+    os.makedirs(output_dir, exist_ok=True)
     create_visualizations(df, output_dir)
-    generate_readme(summary, missing_values, correlation_matrix, outliers, insights, output_dir)
-    print(f"Analysis completed. Check {output_dir} for results.")
+    generate_readme(output_dir, summary, missing_values, correlation_matrix, outliers, insights)
+
+    print(f"Analysis complete! Results saved to: {output_dir}")
+
+# ----------------------------- Script Execution -----------------------------
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 2:
-        print("Usage: python merged_autolysis.py dataset.csv")
-        sys.exit(1)
-    main(sys.argv[1])
+    main()
